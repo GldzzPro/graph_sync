@@ -1,0 +1,29 @@
+# GraphSync Configuration
+
+# Neo4j Database Configuration
+neo4j:
+  uri: "bolt://neo4j:7687"  # Use this URI when running with docker-compose
+  # uri: "bolt://localhost:7687"  # Use this URI when running locally
+  username: "neo4j"
+  password: "password"
+
+# Odoo Instances Configuration
+instances:
+  - name: "production"
+    url: "http://odoo.example.com"
+    db_name: "odoo_db"
+    # Authentication options (choose one):
+    # Option 1: Username and password
+    username: "admin"
+    password: "admin"
+    # Option 2: API key
+    # api_key: "your-api-key"
+
+  - name: "staging"
+    url: "http://staging.odoo.example.com"
+    db_name: "odoo_staging"
+    username: "admin"
+    password: "admin"
+
+# Logging Configuration
+log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
