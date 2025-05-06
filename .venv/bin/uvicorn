@@ -1,4 +1,4 @@
-#!/Users/farhatbaaroun/Documents/GitHub/odoo/graph_sync/.venv/bin/python3.12
+#!/Users/farhatbaaroun/Documents/GitHub/odoo17/graph_sync/.venv/bin/python3.11
 # -*- coding: utf-8 -*-
 import re
 import sys

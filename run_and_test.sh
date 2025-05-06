@@ -53,8 +53,8 @@ echo "🎯 Testing POST ${BASE_URL}/trigger"
 PAYLOAD=$(
   cat <<EOF
 {
-  "module_ids": [333],
-  "stop_conditions": [[["category_id", "not in", [52]]]]
+  "module_ids": [615],
+  "stop_conditions": [[["category_id", "not in", [80]]]]
 }
 EOF
 )
