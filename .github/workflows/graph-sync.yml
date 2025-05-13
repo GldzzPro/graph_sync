@@ -1,0 +1,86 @@
+name: Graph Sync Microservice
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - trigger
+          - healthcheck
+      category_prefixes:
+        description: 'Category prefixes (comma-separated, for trigger action)'
+        required: false
+        default: 'Custom'
+      include_reverse:
+        description: 'Include reverse dependencies (for trigger action)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      max_depth:
+        description: 'Maximum depth (for trigger action, empty for unlimited)'
+        required: false
+        default: ''
+
+jobs:
+  graph-sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Deploy service
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          docker-compose up -d
+          echo "Waiting for service to start..."
+          sleep 10
+          curl -f http://localhost:8000/healthcheck || (echo "Service failed to start" && exit 1)
+          echo "Service deployed successfully!"
+      
+      - name: Health check
+        if: ${{ github.event.inputs.action == 'healthcheck' }}
+        run: |
+          curl -s http://localhost:8000/healthcheck | jq
+      
+      - name: Trigger sync
+        if: ${{ github.event.inputs.action == 'trigger' }}
+        run: |
+          # Convert input values to valid JSON
+          CATEGORIES_JSON="[$(echo "${{ github.event.inputs.category_prefixes }}" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/' | sed 's/,/, /g')]"
+          
+          # Handle max_depth - if empty, use null
+          MAX_DEPTH="${{ github.event.inputs.max_depth }}"
+          if [ -z "$MAX_DEPTH" ]; then
+            MAX_DEPTH="null"
+          fi
+          
+          # Prepare payload
+          PAYLOAD='{
+            "category_prefixes": '$CATEGORIES_JSON',
+            "include_reverse": '${{ github.event.inputs.include_reverse }}',
+            "options": {
+              "exact_match": false,
+              "include_subcategories": true,
+              "max_depth": '$MAX_DEPTH'
+            }
+          }'
+          
+          echo "Triggering sync with payload: $PAYLOAD"
+          
+          # Send request
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            http://localhost:8000/trigger | jq

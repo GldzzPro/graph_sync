@@ -2,7 +2,7 @@ import logging
 import asyncio
 import aiohttp
 from typing import List, Dict, Any
-from models import Instance, InstanceResponse
+from models import Instance, InstanceResponse, GraphData
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class OdooJsonRPC:
             "jsonrpc": "2.0",
             "method": "call",
             "params": params,
-            "id": None
+            "id": 1
         }
         
         headers = {"Content-Type": "application/json"}
@@ -63,7 +63,7 @@ class OdooGraphFetcher:
             "options": options
         }
         
-        return await self.rpc.call("/graph_module_dependency/category_module_graph", params)
+        return await self.rpc.call("/api/graph/category", params)
     
     async def fetch_reverse_category_module_graph(self, category_prefixes: List[str], options: Dict[str, Any]) -> Dict[str, Any]:
         """Fetch reverse category module dependency graph from Odoo."""
@@ -72,15 +72,31 @@ class OdooGraphFetcher:
             "options": options
         }
         
-        return await self.rpc.call("/graph_module_dependency/reverse_category_module_graph", params)
+        return await self.rpc.call("/api/graph/category/reverse", params)
 
     async def healthcheck(self) -> bool:
-        """Check if the instance is healthy."""
+        """Check if the instance is healthy by attempting to call a simple JSON-RPC endpoint."""
         try:
-            url = f"{self.instance.url}/web/health"
+            # Try a simple JSON-RPC call to check if Odoo is responsive
+            # We'll use the session_info endpoint which is lightweight and available in all Odoo instances
+            url = f"{self.instance.url}/web/session/get_session_info"
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "call",
+                "params": {},
+                "id": 1
+            }
+            
+            headers = {"Content-Type": "application/json"}
+            
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as response:
-                    return response.status == 200
+                async with session.post(url, json=payload, headers=headers, timeout=5) as response:
+                    if response.status != 200:
+                        return False
+                    
+                    result = await response.json()
+                    return "result" in result and "error" not in result
+                    
         except Exception as e:
             logger.error(f"Health check failed for {self.instance.name}: {str(e)}")
             return False
@@ -108,22 +124,23 @@ async def fetch_instance_data(instance: Instance, fetch_options: Dict[str, Any])
         logger.info(f"Fetching category module graph for {instance.name} with prefixes={category_prefixes}")
         forward_graph = await fetcher.fetch_category_module_graph(category_prefixes, options)
         
+        # Initialize graph data structure
+        graph_data = GraphData(
+            nodes=forward_graph.get("nodes", []),
+            edges=forward_graph.get("edges", [])
+        )
+        
         # Fetch reverse dependencies if requested
         if include_reverse:
             logger.info(f"Fetching reverse category module graph for {instance.name}")
             reverse_graph = await fetcher.fetch_reverse_category_module_graph(category_prefixes, options)
             
             # Combine the graphs - ensure unique nodes and edges
-            all_nodes = {}
+            all_nodes = {node.get("id"): node for node in graph_data.nodes if "id" in node}
             all_edges = {}
             
-            # Process forward graph nodes and edges
-            for node in forward_graph.get("nodes", []):
-                node_id = node.get("id")
-                if node_id:
-                    all_nodes[node_id] = node
-            
-            for edge in forward_graph.get("edges", []):
+            # Add edges from forward graph
+            for edge in graph_data.edges:
                 edge_id = f"{edge.get('from')}-{edge.get('to')}"
                 if edge_id:
                     all_edges[edge_id] = edge
@@ -131,24 +148,22 @@ async def fetch_instance_data(instance: Instance, fetch_options: Dict[str, Any])
             # Process reverse graph nodes and edges
             for node in reverse_graph.get("nodes", []):
                 node_id = node.get("id")
-                if node_id:
+                if node_id and node_id not in all_nodes:
                     all_nodes[node_id] = node
             
             for edge in reverse_graph.get("edges", []):
                 edge_id = f"{edge.get('from')}-{edge.get('to')}"
-                if edge_id:
+                if edge_id and edge_id not in all_edges:
                     all_edges[edge_id] = edge
             
             # Create combined data with unique nodes and edges
-            combined_data = {
-                "nodes": list(all_nodes.values()),
-                "edges": list(all_edges.values())
-            }
-            response.data = combined_data
-        else:
-            response.data = forward_graph
+            graph_data = GraphData(
+                nodes=list(all_nodes.values()),
+                edges=list(all_edges.values())
+            )
         
-        logger.info(f"Successfully fetched data from {instance.name}: {len(response.data.get('nodes', []))} nodes, {len(response.data.get('edges', []))} edges")
+        response.data = graph_data
+        logger.info(f"Successfully fetched data from {instance.name}: {len(graph_data.nodes)} nodes, {len(graph_data.edges)} edges")
         return response
     except Exception as e:
         logger.error(f"Failed to fetch data from instance {instance.name}: {str(e)}")
