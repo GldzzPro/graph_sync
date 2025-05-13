@@ -108,7 +108,6 @@ POST /trigger
 Request Body:
 ```json
 {
-  "module_ids": [333, 334],  // Optional: List of module IDs to fetch
   "category_prefixes": ["Custom"],  // Optional: List of category prefixes to filter modules
   "max_depth": 3,  // Optional: Maximum depth for dependency traversal (null for unlimited)
   "include_reverse": true  // Optional: Whether to include reverse dependencies
@@ -145,7 +144,6 @@ Response:
 Request body:
 ```json
 {
-  "module_ids": [333, 334],
   "category_prefixes": ["Custom"],
   "max_depth": null,
   "include_reverse": true
