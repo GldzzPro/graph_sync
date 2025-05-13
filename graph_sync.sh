@@ -17,12 +17,15 @@ function show_help {
   echo "  logs          View the logs of the microservice"
   echo ""
   echo "Options for 'trigger':"
-  echo "  --module-ids=<ids>       Comma-separated list of module IDs (default: 333)"
-  echo "  --include-reverse=<bool> Include reverse dependencies (default: true)"
+  echo "  --category-prefixes=<prefixes>  Comma-separated list of category prefixes (default: Custom)"
+  echo "  --include-reverse=<bool>        Include reverse dependencies (default: true)"
+  echo "  --exact-match=<bool>            Match exact category names, not prefixes (default: false)"
+  echo "  --include-subcategories=<bool>  Include modules from subcategories (default: true)"
+  echo "  --max-depth=<int>               Maximum depth for dependency traversal (default: null for unlimited)"
   echo ""
   echo "Examples:"
   echo "  $0 start"
-  echo "  $0 trigger --module-ids=333,334 --include-reverse=true"
+  echo "  $0 trigger --category-prefixes=Custom,Technical --include-reverse=true"
 }
 
 function start {
@@ -52,26 +55,46 @@ function healthcheck {
 
 function trigger {
   # Default values
-  MODULE_IDS="333"
+  CATEGORY_PREFIXES="Custom"
   INCLUDE_REVERSE="true"
+  EXACT_MATCH="false"
+  INCLUDE_SUBCATEGORIES="true"
+  MAX_DEPTH="null"
   
   # Parse arguments
   for arg in "$@"; do
     case $arg in
-      --module-ids=*)
-        MODULE_IDS="${arg#*=}"
+      --category-prefixes=*)
+        CATEGORY_PREFIXES="${arg#*=}"
         ;;
       --include-reverse=*)
         INCLUDE_REVERSE="${arg#*=}"
         ;;
+      --exact-match=*)
+        EXACT_MATCH="${arg#*=}"
+        ;;
+      --include-subcategories=*)
+        INCLUDE_SUBCATEGORIES="${arg#*=}"
+        ;;
+      --max-depth=*)
+        MAX_DEPTH="${arg#*=}"
+        ;;
     esac
   done
   
-  # Convert comma-separated module IDs to JSON array
-  MODULE_IDS_JSON="[$(echo $MODULE_IDS | sed 's/,/,/g')]"
+  # Convert comma-separated categories to JSON array
+  CATEGORIES_JSON="[$(echo $CATEGORY_PREFIXES | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/' | sed 's/,/, /g')]"
   
   # Prepare JSON payload
-  PAYLOAD='{"module_ids": '$MODULE_IDS_JSON', "include_reverse": '$INCLUDE_REVERSE'}}'
+  PAYLOAD='{
+    "category_prefixes": '$CATEGORIES_JSON',
+    "include_reverse": '$INCLUDE_REVERSE',
+    "options": {
+      "exact_match": '$EXACT_MATCH',
+      "include_subcategories": '$INCLUDE_SUBCATEGORIES',
+      "max_depth": '$MAX_DEPTH'
+    }
+  }'
   
   echo "Triggering sync with payload: $PAYLOAD"
   

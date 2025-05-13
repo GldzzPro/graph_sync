@@ -9,8 +9,6 @@ instances:
   - name: "odoo2"
     url: "http://localhost:8070"  # Odoo instance 2
     
-  - name: "odoo3"
-    url: "http://localhost:8071"  # Odoo instance 3
 
 # Logging Configuration
 log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL

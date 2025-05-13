@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 
 from config import Config
-from models import SyncOptions, InstanceResponse, HealthCheckResponse
+from models import InstanceResponse, HealthCheckResponse
 from fetcher import fetch_all
 
 # Configure logging based on environment variable
@@ -64,10 +64,15 @@ async def healthcheck(config: Config = Depends(get_config)):
 
 # Request model for trigger endpoint
 class TriggerRequest(BaseModel):
-    module_ids: Optional[List[int]] = []
-    category_prefixes: Optional[List[str]] = ["Custom"]
-    max_depth: Optional[int] = None
+    category_prefixes: List[str] = ["Custom"]
     include_reverse: bool = True
+    options: Optional[Dict[str, Any]] = {
+        "exact_match": False,
+        "include_subcategories": True,
+        "max_depth": None,
+        "stop_domains": [],
+        "exclude_domains": []
+    }
 
 # Trigger endpoint
 @app.post("/trigger", response_model=List[InstanceResponse])
@@ -78,19 +83,21 @@ async def trigger(request: TriggerRequest, config: Config = Depends(get_config))
         if not config.instances:
             raise HTTPException(status_code=400, detail="No instances configured. Please check your configuration.")
         
+        if not request.category_prefixes:
+            raise HTTPException(status_code=400, detail="At least one category prefix must be provided.")
+        
         # Prepare options for fetching
-        options = {
-            "module_ids": request.module_ids,
+        fetch_options = {
             "category_prefixes": request.category_prefixes,
-            "max_depth": request.max_depth,
-            "include_reverse": request.include_reverse
+            "include_reverse": request.include_reverse,
+            "options": request.options or {}
         }
         
         # Log request details
-        logger.info(f"Triggering fetch for {len(config.instances)} instances with options: {options}")
+        logger.info(f"Triggering fetch for {len(config.instances)} instances with options: {fetch_options}")
         
         # Fetch data from all instances asynchronously
-        results = await fetch_all(config.instances, options)
+        results = await fetch_all(config.instances, fetch_options)
         
         # Log response summary
         success_count = sum(1 for r in results if r.status == "success")

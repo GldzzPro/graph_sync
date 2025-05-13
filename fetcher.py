@@ -1,21 +1,28 @@
 import logging
 import asyncio
 import aiohttp
-from typing import List, Dict, Any, Optional
-from models import Instance, InstanceResponse, SyncOptions
+from typing import List, Dict, Any
+from models import Instance, InstanceResponse
 
 logger = logging.getLogger(__name__)
 
 
-class OdooFetcher:
-    """Fetches module dependency data from Odoo instances."""
+class OdooJsonRPC:
+    """Helper class for Odoo JSON-RPC operations."""
     
     def __init__(self, instance: Instance):
         self.instance = instance
     
-    async def _make_request(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def call(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Make an asynchronous JSON-RPC request to the Odoo API."""
         url = f"{self.instance.url}{endpoint}"
+        
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "params": params,
+            "id": None
+        }
         
         headers = {"Content-Type": "application/json"}
         
@@ -27,8 +34,8 @@ class OdooFetcher:
                     
                     if "error" in result:
                         error = result["error"]
-                        logger.error(f"Odoo API error for {self.instance.name}: {error['message']}")
-                        raise Exception(f"Odoo API error: {error['message']}")
+                        logger.error(f"Odoo API error for {self.instance.name}: {error.get('message', error)}")
+                        raise Exception(f"Odoo API error: {error.get('message', error)}")
                     
                     return result.get("result", {})
         except asyncio.TimeoutError:
@@ -40,37 +47,32 @@ class OdooFetcher:
         except Exception as e:
             logger.error(f"Failed to fetch data from {self.instance.name} at {url}: {str(e)}")
             raise
+
+
+class OdooGraphFetcher:
+    """Fetches module dependency graph data from Odoo instances."""
     
-    async def fetch_module_graph(self, module_ids: List[int], options: Dict[str, Any]) -> Dict[str, Any]:
-        """Fetch module dependency graph from Odoo."""
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "call",
-            "params": {
-                "module_ids": module_ids,
-                "category_prefixes": options.get("category_prefixes", ["Custom"]),
-                "max_depth": options.get("max_depth"),
-                "include_reverse": False  # We'll handle reverse dependencies separately
-            },
-            "id": None
+    def __init__(self, instance: Instance):
+        self.instance = instance
+        self.rpc = OdooJsonRPC(instance)
+    
+    async def fetch_category_module_graph(self, category_prefixes: List[str], options: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch category module dependency graph from Odoo."""
+        params = {
+            "category_prefixes": category_prefixes,
+            "options": options
         }
         
-        return await self._make_request("/api/graph/module", payload)
+        return await self.rpc.call("/graph_module_dependency/category_module_graph", params)
     
-    async def fetch_reverse_graph(self, module_ids: List[int], options: Dict[str, Any]) -> Dict[str, Any]:
-        """Fetch reverse module dependency graph from Odoo."""
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "call",
-            "params": {
-                "module_ids": module_ids,
-                "category_prefixes": options.get("category_prefixes", ["Custom"]),
-                "max_depth": options.get("max_depth")
-            },
-            "id": None
+    async def fetch_reverse_category_module_graph(self, category_prefixes: List[str], options: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch reverse category module dependency graph from Odoo."""
+        params = {
+            "category_prefixes": category_prefixes,
+            "options": options
         }
         
-        return await self._make_request("/api/graph/reverse", payload)
+        return await self.rpc.call("/graph_module_dependency/reverse_category_module_graph", params)
 
     async def healthcheck(self) -> bool:
         """Check if the instance is healthy."""
@@ -84,9 +86,9 @@ class OdooFetcher:
             return False
 
 
-async def fetch_instance_data(instance: Instance, options: Dict[str, Any]) -> InstanceResponse:
-    """Fetch data from a single instance."""
-    fetcher = OdooFetcher(instance)
+async def fetch_instance_data(instance: Instance, fetch_options: Dict[str, Any]) -> InstanceResponse:
+    """Fetch graph data from a single instance."""
+    fetcher = OdooGraphFetcher(instance)
     response = InstanceResponse(instance=instance.name)
     
     try:
@@ -97,18 +99,19 @@ async def fetch_instance_data(instance: Instance, options: Dict[str, Any]) -> In
             response.error = f"Instance {instance.name} is not healthy or not reachable"
             return response
 
-        # Fetch forward dependencies
-        module_ids = options.get("module_ids", [333])  # Default to module ID 333 if not specified
-        if not module_ids:
-            module_ids = [333]  # Ensure we have at least one module ID
-            
-        logger.info(f"Fetching dependencies for {instance.name} with module_ids={module_ids}")
-        forward_graph = await fetcher.fetch_module_graph(module_ids, options)
+        # Extract options
+        category_prefixes = fetch_options.get("category_prefixes", ["Custom"])
+        options = fetch_options.get("options", {})
+        include_reverse = fetch_options.get("include_reverse", True)
+        
+        # Fetch forward category module graph
+        logger.info(f"Fetching category module graph for {instance.name} with prefixes={category_prefixes}")
+        forward_graph = await fetcher.fetch_category_module_graph(category_prefixes, options)
         
         # Fetch reverse dependencies if requested
-        if options.get("include_reverse", True):
-            logger.info(f"Fetching reverse dependencies for {instance.name}")
-            reverse_graph = await fetcher.fetch_reverse_graph(module_ids, options)
+        if include_reverse:
+            logger.info(f"Fetching reverse category module graph for {instance.name}")
+            reverse_graph = await fetcher.fetch_reverse_category_module_graph(category_prefixes, options)
             
             # Combine the graphs - ensure unique nodes and edges
             all_nodes = {}
@@ -154,20 +157,37 @@ async def fetch_instance_data(instance: Instance, options: Dict[str, Any]) -> In
         return response
 
 
-async def fetch_all(instances: List[Instance], options: Dict[str, Any]) -> List[InstanceResponse]:
+async def fetch_all(instances: List[Instance], fetch_options: Dict[str, Any]) -> List[InstanceResponse]:
     """Fetch module dependency graphs from all instances asynchronously."""
     if not instances:
         logger.warning("No instances configured. Please check your configuration.")
         return []
     
-    logger.info(f"Fetching data from {len(instances)} instances with options: {options}")
-    tasks = [fetch_instance_data(instance, options) for instance in instances]
+    logger.info(f"Fetching data from {len(instances)} instances with options: {fetch_options}")
+    tasks = [fetch_instance_data(instance, fetch_options) for instance in instances]
     
     try:
-        # Use gather with return_exceptions=False to fail fast if any instance fails
-        results = await asyncio.gather(*tasks)
-        return results
+        # Gather all results, even if some fail
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results, converting exceptions to error responses
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                # Convert exception to error response
+                instance_name = instances[i].name if i < len(instances) else "unknown"
+                processed_results.append(
+                    InstanceResponse(
+                        instance=instance_name, 
+                        status="error", 
+                        error=f"Unhandled exception: {str(result)}"
+                    )
+                )
+            else:
+                processed_results.append(result)
+                
+        return processed_results
     except Exception as e:
         logger.error(f"Error fetching data from instances: {str(e)}")
-        # Return partial results if possible
+        # Return error response
         return [InstanceResponse(instance="error", status="error", error=str(e))]

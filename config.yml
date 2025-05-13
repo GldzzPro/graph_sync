@@ -3,13 +3,10 @@
 # Docker Container Instances Configuration
 instances:
   - name: "odoo1"
-    url: "http://odoo1:8069"
+    url: "http://odoo1.local:8070"
   
   - name: "odoo2"
-    url: "http://odoo2:8069"
-
-  - name: "odoo3"
-    url: "http://odoo3:8069"
+    url: "http://odoo2.local:8069"
 
 # Logging Configuration
 log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
