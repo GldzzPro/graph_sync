@@ -1,0 +1,90 @@
+name: Graph Sync Microservice
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - trigger
+          - healthcheck
+      module_ids:
+        description: 'Module IDs to fetch (comma-separated)'
+        required: false
+        default: '333'
+      category_prefixes:
+        description: 'Category prefixes to filter modules (comma-separated)'
+        required: false
+        default: 'Custom'
+      max_depth:
+        description: 'Maximum depth for dependency traversal (empty for unlimited)'
+        required: false
+      include_reverse:
+        description: 'Include reverse dependencies'
+        required: false
+        default: 'true'
+        type: boolean
+      docker_instances:
+        description: 'Docker instances to use (comma-separated, format: name1:url1,name2:url2)'
+        required: false
+
+jobs:
+  graph-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        if: ${{ github.event.inputs.action == 'deploy' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        if: ${{ github.event.inputs.action == 'deploy' }}
+
+      - name: Build and deploy
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          cd graph_sync
+          docker-compose up -d --build
+
+      - name: Health check
+        if: ${{ github.event.inputs.action == 'healthcheck' || github.event.inputs.action == 'deploy' }}
+        run: |
+          curl -f http://localhost:8000/healthcheck
+
+      - name: Trigger sync
+        if: ${{ github.event.inputs.action == 'trigger' }}
+        run: |
+          # Convert comma-separated module IDs to JSON array
+          MODULE_IDS=$(echo "${{ github.event.inputs.module_ids }}" | jq -R 'split(",") | map(tonumber)')
+          
+          # Convert comma-separated category prefixes to JSON array
+          CATEGORY_PREFIXES=$(echo "${{ github.event.inputs.category_prefixes }}" | jq -R 'split(",")')
+          
+          # Set environment variables if docker_instances is provided
+          if [ -n "${{ github.event.inputs.docker_instances }}" ]; then
+            export DOCKER_INSTANCES="${{ github.event.inputs.docker_instances }}"
+          fi
+          
+          # Prepare JSON payload
+          PAYLOAD=$(jq -n \
+            --arg include_reverse "${{ github.event.inputs.include_reverse }}" \
+            --argjson module_ids "$MODULE_IDS" \
+            --argjson category_prefixes "$CATEGORY_PREFIXES" \
+            --arg max_depth "${{ github.event.inputs.max_depth }}" \
+            '{
+              "module_ids": $module_ids, 
+              "category_prefixes": $category_prefixes, 
+              "include_reverse": ($include_reverse == "true"),
+              "max_depth": (if $max_depth == "" then null else ($max_depth | tonumber) end)
+            }'
+          )
+          
+          # Send request to trigger endpoint
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            http://localhost:8000/trigger

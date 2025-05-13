@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../../../Desktop/custommz"
+		},
+		{
+			"path": "../../../mcp-neo4j-cypher"
+		}
+	],
+	"settings": {}
+}

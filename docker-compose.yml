@@ -1,24 +1,48 @@
 version: '3.8'
 
 services:
-  graphsync:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  graph_sync:
+    build: .
+    container_name: graph_sync
     ports:
       - "8000:8000"
     volumes:
-      - ./config.yaml:/app/config.yaml
-    env_file:
-      - .env
+      - ./:/app
     environment:
-      # Neo4j AuraDB connection settings
-      - NEO4J_URI=${NEO4J_URI}
-      - NEO4J_USERNAME=${NEO4J_USERNAME}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - CONFIG_PATH=/app/config.yml
+      - LOG_LEVEL=INFO
+      # Configure Docker instances dynamically
+      - DOCKER_INSTANCES=odoo1:http://odoo1:8069,odoo2:http://odoo2:8069,odoo3:http://odoo3:8069
+    restart: unless-stopped
+    networks:
+      - odoo_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # Example Odoo instances that would be monitored
+  # These are just placeholders and would be actual Odoo containers in production
+  odoo1:
+    image: hello-world
+    container_name: odoo1
+    networks:
+      - odoo_network
+
+  odoo2:
+    image: hello-world
+    container_name: odoo2
+    networks:
+      - odoo_network
+
+  odoo3:
+    image: hello-world
+    container_name: odoo3
+    networks:
+      - odoo_network
+
+networks:
+  odoo_network:
+    driver: bridge
