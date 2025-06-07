@@ -13,13 +13,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py config.py fetcher.py models.py ./
-COPY config.yml /app/config.yml
+COPY config.yaml /app/config.yaml
 
 # Expose port
 EXPOSE 8000
 
 # Set default environment variables
-ENV CONFIG_PATH=/app/config.yml
+ENV CONFIG_PATH=/app/config.yaml
 ENV LOG_LEVEL=INFO
 
 # Healthcheck to ensure the application is running
