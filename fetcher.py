@@ -75,27 +75,18 @@ class OdooGraphFetcher:
         return await self.rpc.call("/api/graph/category/reverse", params)
 
     async def healthcheck(self) -> bool:
-        """Check if the instance is healthy by attempting to call a simple JSON-RPC endpoint."""
+        """Check if the instance is healthy by attempting to call the health endpoint."""
         try:
-            # Try a simple JSON-RPC call to check if Odoo is responsive
-            # We'll use the session_info endpoint which is lightweight and available in all Odoo instances
-            url = f"{self.instance.url}/web/session/get_session_info"
-            payload = {
-                "jsonrpc": "2.0",
-                "method": "call",
-                "params": {},
-                "id": 1
-            }
-            
-            headers = {"Content-Type": "application/json"}
+            # Use the simple health endpoint that we know works
+            url = f"{self.instance.url}/web/health"
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers, timeout=5) as response:
+                async with session.get(url, timeout=5) as response:
                     if response.status != 200:
                         return False
                     
                     result = await response.json()
-                    return "result" in result and "error" not in result
+                    return result.get("status") == "pass"
                     
         except Exception as e:
             logger.error(f"Health check failed for {self.instance.name}: {str(e)}")

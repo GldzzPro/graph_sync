@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # test_custom_modules.sh — Start FastAPI service and trigger a sync operation for Custom category modules
 
 set -euo pipefail
@@ -6,10 +6,11 @@ set -euo pipefail
 VENV_DIR=".venv"
 REQ_FILE="requirements.txt"
 ENV_FILE=".env"
-CONFIG_FILE="config.yaml"
+CONFIG_FILE="config.yml"
 HOST="localhost"
 PORT=8000
 BASE_URL="http://${HOST}:${PORT}"
+NEO4J_SYNC_URL="http://localhost:8001"
 LOG_FILE="custom_modules_sync.log"
 
 # Check if config.yaml exists
@@ -36,58 +37,78 @@ if ! grep -q "name: \"$INSTANCE_NAME\"" "$CONFIG_FILE"; then
   exit 1
 fi
 
-# 1. Create & activate venv if it doesn't exist
-if [ ! -d "$VENV_DIR" ]; then
-  echo "🛠️  Creating virtualenv..."
-  python3 -m venv "$VENV_DIR"
-fi
+# Function to check if service is running
+check_service_running() {
+  if curl -s "$BASE_URL/healthcheck" >/dev/null 2>&1; then
+    return 0  # Service is running
+  else
+    return 1  # Service is not running
+  fi
+}
 
-# shellcheck disable=SC1090
-source "$VENV_DIR/bin/activate"
-
-# 2. Install dependencies
-echo "📦 Installing dependencies..."
-pip install --upgrade pip
-pip install -r "$REQ_FILE"
-
-# 3. Load environment variables
-if [ -f "$ENV_FILE" ]; then
-  echo "🔑 Loading environment from $ENV_FILE"
-  set -a
-  # shellcheck disable=SC1091
-  source "$ENV_FILE"
-  set +a
+# Check if service is already running
+SERVICE_ALREADY_RUNNING=false
+if check_service_running; then
+  echo "✅ Service is already running on $BASE_URL"
+  SERVICE_ALREADY_RUNNING=true
+  MS_PID=""  # No PID since we didn't start it
 else
-  echo "⚠️  No $ENV_FILE found, using defaults."
+  echo "🔍 Service not running, starting itzzz..."
+  
+  # 1. Create & activate venv if it doesn't exist
+  if [ ! -d "$VENV_DIR" ]; then
+    echo "🛠️  Creating virtualenv..."
+    python3 -m venv "$VENV_DIR"
+  fi
+
+  # shellcheck disable=SC1090
+  source "$VENV_DIR/bin/activate"
+
+  # 2. Install dependencies
+  echo "📦 Installing dependencies..."
+  pip install --upgrade pip
+  pip install -r "$REQ_FILE"
+
+  # 3. Load environment variables
+  if [ -f "$ENV_FILE" ]; then
+    echo "🔑 Loading environment from $ENV_FILE"
+    set -a
+    # shellcheck disable=SC1091
+    source "$ENV_FILE"
+    set +a
+  else
+    echo "⚠️  No $ENV_FILE found, using defaults."
+  fi
+
+  # 4. Start FastAPI microservice in the background
+  echo "🚀 Starting GraphSync microservice on $BASE_URL..."
+  uvicorn app:app --host 0.0.0.0 --port "$PORT" --log-level info > "$LOG_FILE" 2>&1 &
+  MS_PID=$!
+
+  # 5. Wait for service to be ready
+  echo -n "⏳ Waiting for service to start"
+  until check_service_running; do
+    echo -n "."
+    sleep 1
+    # Check if service is still running
+    if ! kill -0 $MS_PID 2>/dev/null; then
+      echo "❌ Service failed to start! Check $LOG_FILE for details."
+      cat "$LOG_FILE"
+      exit 1
+    fi
+  done
+  echo " ready!"
 fi
 
-# 4. Start FastAPI microservice in the background
-echo "🚀 Starting GraphSync microservice on $BASE_URL..."
-uvicorn app:app --host 0.0.0.0 --port "$PORT" --log-level info > "$LOG_FILE" 2>&1 &
-MS_PID=$!
-
-# Ensure we clean up the service on exit
+# Ensure we clean up the service on exit (only if we started it)
 function cleanup {
-  echo "🛑 Stopping microservice (PID: $MS_PID)..."
-  kill $MS_PID 2>/dev/null || true
+  if [ "$SERVICE_ALREADY_RUNNING" = false ] && [ -n "$MS_PID" ]; then
+    echo "🛑 Stopping microservice (PID: $MS_PID)..."
+    kill $MS_PID 2>/dev/null || true
+  fi
   echo "✅ Test completed"
 }
 # trap cleanup EXIT  # Commented out to keep service running
-
-# 5. Wait for service to be ready
-echo -n "⏳ Waiting for service to start"
-until curl -s "$BASE_URL/health" >/dev/null; do
-  echo -n "."
-  sleep 1
-  # Check if service is still running
-  if ! kill -0 $MS_PID 2>/dev/null; then
-    echo "❌ Service failed to start! Check $LOG_FILE for details."
-    cat "$LOG_FILE"
-    exit 1
-  fi
-  
-done
-echo " ready!"
 
 # 6. Trigger the sync operation for Custom category modules
 echo "🔄 Triggering sync operation for Custom category modules..."
@@ -95,12 +116,23 @@ echo "🔄 Triggering sync operation for Custom category modules..."
 # Use the INSTANCE_NAME that was validated in the config check
 echo "📌 Using Odoo instance: $INSTANCE_NAME"
 
-SYNC_RESPONSE=$(curl -s -X POST "$BASE_URL/api/sync/trigger" \
+# FIXED: Changed from /api/sync/trigger to /trigger
+# Also updated the request payload to match the TriggerRequest model
+SYNC_RESPONSE=$(curl -s -X POST "$BASE_URL/trigger" \
   -H "Content-Type: application/json" \
-  -d '{"module_ids": [], "category_prefixes": ["Custom"], "max_depth": null, "include_reverse": true, "instance_name": "'$INSTANCE_NAME'"}')
+  -d '{"category_prefixes": ["Custom"], "include_reverse": true, "options": {"exact_match": false, "include_subcategories": true, "max_depth": null, "stop_domains": [], "exclude_domains": []}}')
 
 echo "📊 Sync response: $SYNC_RESPONSE"
 
+# Store the graph_sync response and use it for Neo4j ingestion
+echo "🔄 Sending graph data to Neo4j microservice..."
+# Wrap the sync response in the expected format
+INGEST_PAYLOAD=$(echo "$SYNC_RESPONSE" | jq '{responses: .}')
+INGEST_RESPONSE=$(curl -s -X POST "$NEO4J_SYNC_URL/api/graph/ingest" \
+  -H "Content-Type: application/json" \
+  -d "$INGEST_PAYLOAD")
+
+echo "📊 Neo4j ingest response: $INGEST_RESPONSE"
 # 7. Monitor logs for completion
 echo "📋 Monitoring logs for completion..."
 TIMEOUT=180  # Increased timeout for multi-instance setup
@@ -118,8 +150,12 @@ while true; do
       echo "⚠️ Sync completed but Neo4j ingestion status unclear. Check logs for details."
     fi
     
-    echo "👉 Service is still running on $BASE_URL (PID: $MS_PID)"
-    echo "👉 Use 'kill $MS_PID' to stop it when you're done"
+    if [ "$SERVICE_ALREADY_RUNNING" = false ]; then
+      echo "👉 Service is still running on $BASE_URL (PID: $MS_PID)"
+      echo "👉 Use 'kill $MS_PID' to stop it when you're done"
+    else
+      echo "👉 Service continues running on $BASE_URL"
+    fi
     break
   fi
   
@@ -171,7 +207,6 @@ if grep -q "Added [0-9]\+ relationships" "$LOG_FILE"; then
   EDGES=$(grep "Added [0-9]\+ relationships" "$LOG_FILE" | tail -n 1 | sed 's/.*Added \([0-9]\+\) relationships.*/\1/')
   echo "   - Relationships added: $EDGES"
 fi
-
 
 echo ""
 echo "📝 Check $LOG_FILE for detailed logs"
