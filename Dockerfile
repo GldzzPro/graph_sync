@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py config.py fetcher.py models.py ./
-COPY config.yaml /app/config.yaml
+#COPY config.yaml /app/config.yaml
 
 # Expose port
 EXPOSE 8000
